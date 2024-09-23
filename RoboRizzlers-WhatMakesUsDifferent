@@ -1,0 +1,11 @@
+RoboRizzlers XLR8
+
+Stuff that made us different:
+
+1. We destroyed a Rpi Pico (obliterated).
+
+2. We worked on AUV project, integrating a sound system buzzer into it.
+
+3. We totally rewrote the diffrential mechanism code to incorporate turning and moving at the same time with controller.
+
+4. We had to deal with both our MPU and ESP not working on two seperate occasssions ( :( ).
