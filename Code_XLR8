@@ -1,0 +1,337 @@
+//RoboRizzlers edit
+
+#include <WiFi.h>
+#include <typeinfo>
+#include <string.h>
+#include <stdio.h>
+
+
+// SSID and password for the access point
+const char* ssid = "RoboRizzlers"; //Enter your team name as the SSID here
+const char* password = "ASSV2028"; // Make a good password!
+
+// Define a structure to hold IMU (Inertial Measurement Unit) data.
+
+//here gx,gy,gz denote component of gravitation acceleration in 3 axes x,y,z laid and measured by IMU 
+typedef struct {
+  float gx = 0, gy = 0, gz = 0;
+} IMUData;
+
+IMUData myMessage; // Create a variable (instance of struct) to store received IMU data
+int cmd = 0;       // Initialize motor control command variable
+int spd = 0;       // Initialize motor speed variable
+int tfwd = 0; int tturn = 0; double u = 0;
+
+int u1, u2;
+// Function to update motor control based on received IMU data
+void updateMotorControl() {
+  float gx = myMessage.gx;
+  float gy = myMessage.gy;
+  float gz = myMessage.gz;
+  //member variables of struct instance myMessage are copied over to local floats for easier usability.
+  
+  tfwd = atan2(gx, gz) * 180 / PI;
+  tturn = atan2(gy, gz) * 180 / PI;
+ 
+  //spd = constrain(abs(map(abs(tfwd), 0, 90, 0, 255)), 0, 255);
+  spd = map(constrain(abs(tfwd), 0, 70), 0, 70, 0, 255);
+  //spd functions
+  if(spd < 60){
+    spd = 0;
+  }
+  else if(spd < 75){
+    spd = 75;
+  }
+  else if(spd < 100){
+    spd = 100;
+  }
+  else if(spd < 150){
+    spd = 150;
+  }
+  else if(spd < 200){
+    spd = 200;
+  }
+  else{
+    spd = 255;
+  }
+  
+  // Display motor control information
+  Serial.print("cmd: ");
+  Serial.print(cmd);   // Display motor command
+  Serial.print(", speed: ");
+  Serial.println(spd); // Display motor speed
+}
+
+// Pin assignments for motor control (L298N)
+
+//PWM inputs:
+const int ENA = 8;
+const int ENB = 9;
+
+//Directional inputs:
+const int IN1 = 10;
+const int IN2 = 11;
+const int IN3 = 12;
+const int IN4 = 13;
+
+//AUV led inputs (at GLPO):
+const int RED = 20;
+const int GREEN = 19;
+const int BLUE = 18;
+
+//buzzer
+const int BUZZ = 0;
+
+// Create a WiFiServer object for the TCP server
+WiFiServer server(80);
+
+void setup() {
+  // Start Serial for debugging
+  Serial.begin(115200);
+    // Configure motor control pins as outputs
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  //led setup:
+  pinMode(RED, OUTPUT);
+  pinMode(GREEN, OUTPUT);
+  pinMode(BLUE, OUTPUT);
+
+  //buzzer
+  pinMode(BUZZ, OUTPUT);
+
+  // Set up the access point
+  Serial.println("Setting up WiFi AP...");
+  WiFi.softAP(ssid, password);
+  
+  IPAddress IP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(IP);
+
+  //Some Aesthetic Features
+  int delta = 500;
+  int A[] = {GREEN, BLUE, RED};
+  for(int i = 0; i < 3; i++){
+    digitalWrite(BUZZ, LOW);
+    digitalWrite(A[i], HIGH);
+    delay(delta/2);
+    digitalWrite(A[i], LOW);
+    digitalWrite(BUZZ, HIGH);
+    delay(delta/2);
+  }
+  digitalWrite(RED, HIGH);
+  digitalWrite(BLUE, HIGH);
+  digitalWrite(GREEN, HIGH);
+  delay(1000);
+  digitalWrite(RED, LOW);
+  digitalWrite(BLUE, LOW);
+  digitalWrite(GREEN, LOW);
+
+
+
+  
+  // Start the server
+  server.begin();
+
+  WiFiClient client = server.available();
+  if (client) {
+    Serial.println("Client is connected");
+    
+  }
+  else{
+    Serial.println("Error connecting with client");
+  }
+
+}
+
+//important:
+//Analog write: range from 0 to 255. (set voltage = max_Volts*(input)/255)
+//Digital write: boolean HIGH or LOW (case sensitive): sets voltage to (3.3V or 5V) or 0V depending on board. 
+        //**IN L298N: 5V- HIGH, 0V- LOW
+        //IN1, IN2: motor A, IN3, IN4- motor B. direction depends on how motor is connected (polarity of wires).
+//analog write used for PWM (ENA/B) while digital write for direction specification (IN1/2/3/4)
+
+//code to find led brightness level: (0-255 output)
+int level(int spd){
+  int n;
+  if(spd < 150){
+    n = 150;
+  }
+  else if(spd < 200){
+    n = 200;
+  }
+  else{
+    n = 255;
+  }
+  return n;
+}
+//sample
+
+#define turnf 0.87f
+#define tmin 7
+#define tmax 60
+#define Dmax 40
+#define Dmin 9
+#define d 18
+bool fr, fl; int ur, ul;
+void applyMotorControl() {
+  
+  if (abs(tturn) < tmin){//left-right turned less than 10deg then move fwd or backward
+    ur = spd, ul = spd;
+    if (tfwd>0){//forward: thetaforward>0
+      fr = 1; fl = 1;//both fwd
+      cmd = 2;
+    }else{
+      fr = 0; fl = 0;//both back
+      cmd = 1;
+    }
+  }else if (abs(tturn) > tmax){//left-right turn more than tmax than move left right on axis
+    ur = 255*turnf; ul = 255*turnf;
+    if (tturn < 0){//go left
+      cmd = 4;
+      fr = 1; fl = 0;//right wheel should go forward left backward
+    }else{
+      fr = 0; fl = 1;//right wheel should go backward left forward
+      cmd = 3;
+    }
+  }else{
+    double r = map(abs(tturn), tmin, tmax, Dmax, Dmin);
+    u1 = spd*(1 - d/(2*r)); //closer wheel to CoC
+    u2 = constrain(spd*(1 + d/(2*r)), 0, 255); //further wheel from CoC
+    
+    if (tturn > 0){//right turn
+      ur = u1; ul = u2;
+    }else{
+      ur = u2; ul = u1;
+    }
+    if (tfwd>0){
+      cmd = 2;
+      fr = 1; fl = 1;
+    }else{
+      cmd = 1;
+      fr = 0; fl = 0;
+    }
+  }
+
+  if (fl){
+    digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+  }else{
+    digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);
+  }if (fr){
+    digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+  }else{
+    digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);
+  }
+  analogWrite(ENB, ul);
+  analogWrite(ENA, ur);
+  //LED updates
+
+  int cycle = 0;
+  switch(cmd){
+
+    case 1: //switched for forwards
+    
+        analogWrite(RED, level(spd)*1.5 < 255 ? level(spd)*1.5 : 255);
+        analogWrite(GREEN, 0);
+        analogWrite(BLUE, 0);
+        analogWrite(BUZZ, 0);
+  
+      break;
+
+    case 2: //backwards
+      
+        analogWrite(RED, 0); 
+        analogWrite(GREEN, level(spd));
+        analogWrite(BLUE, level(spd));
+        if(-tfwd > 30){
+          digitalWrite(BUZZ, HIGH);
+        }
+      break;
+
+    case 3: //right magenta
+      analogWrite(RED, level(spd)*1.5 < 255 ? level(spd)*1.5 : 255); 
+      analogWrite(GREEN, 0);
+      analogWrite(BLUE, level(spd));
+      analogWrite(BUZZ, 0);
+      break;
+    case 4: //left yellow
+      analogWrite(RED, level(spd)*1.5 < 255 ? level(spd)*1.5 : 255); 
+      analogWrite(GREEN, level(spd));
+      analogWrite(BLUE, 0);
+      analogWrite(BUZZ, 0);
+      break;
+    default:
+      digitalWrite(RED, LOW); 
+      digitalWrite(GREEN, LOW);
+      digitalWrite(BLUE, LOW);
+      digitalWrite(BUZZ, LOW);
+  }
+
+}
+
+
+bool firsttime = true;
+
+void loop() {
+
+  // Check if a client has connected
+  WiFiClient client = server.available();
+      if (client.available()) {
+        if(firsttime){
+          digitalWrite(BUZZ, HIGH);
+          delay(150);
+          digitalWrite(BUZZ, LOW);
+        }
+        firsttime = false;
+        digitalWrite(LED_BUILTIN, HIGH);
+        String request = client.readStringUntil('\r');
+        Serial.print("Received data: ");
+        Serial.println(request);
+        char chararr[50];
+        request.toCharArray(chararr, sizeof(chararr));
+
+        Serial.println(chararr);
+        char *res;
+        float arr[3];
+        int i = 0;
+
+        res = strtok(chararr , " ");
+        while(res != NULL){
+          Serial.println(res);
+          String strr = String(res);
+          float val = strr.toFloat();
+          Serial.println(val);
+          res = strtok(NULL, " ");
+          arr[i]= val;
+          i++;
+        }
+        myMessage.gx = arr[0];
+        myMessage.gy = arr[1];
+        myMessage.gz = arr[2];
+        updateMotorControl();
+        applyMotorControl();
+      }
+      else{
+        Serial.println("Error connecting with Client");
+        //stops on no connection?
+        myMessage.gx = 0;
+        myMessage.gy = 0;
+        myMessage.gz = 10;
+        updateMotorControl();
+        applyMotorControl();
+        //firsttime = false;
+      }
+      digitalWrite(LED_BUILTIN, LOW);
+   // Continuously update and apply motor control
+
+  //*check usability and experiment with delay time (inbuilt)
+  delay(50); 
+  digitalWrite(BUZZ, LOW);
+  delay(50); // Delay to control loop speed
+
+}
